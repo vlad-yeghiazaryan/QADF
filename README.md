@@ -10,8 +10,8 @@ Parts of the code/logic such as formulas for the bandwidth and critical values (
 
 >>> y = pd.read_csv('examples.csv')['Y']
 
->>> qADF = QADF(y, model='c', pmax=5, ic='AIC')
->>> qADF.fit(tau=0.42)
+>>> qADF = QADF(model='c', pmax=5, ic='AIC')
+>>> qADF.fit(y, tau=0.42)
 >>> qADF.summary()
 """
 quantile: 0.42
