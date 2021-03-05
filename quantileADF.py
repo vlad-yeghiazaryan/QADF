@@ -55,13 +55,15 @@ class QADF:
         self.cv = qrADF['cv']
         self.p = qrADF['p']
         self.results = {
-            'quantile': round(self.tau, 3),
+            'quantile': round(self.tau, 2),
+            'Lags': self.p,
             'rho(quantile)': round(self.rho_tau, 3),
             'rho (OLS)': round(self.rho_ols, 3),
             'delta^2': round(self.delta2, 3),
             'ADF(quantile)': round(self.QURadf, 3),
             'Critical Values': round(self.cv, 3)
         }
+        return self.results
 
     local = {
         'y': numba.float32[:],
@@ -77,7 +79,7 @@ class QADF:
     def QRADF(y, tau, crit_QRadf, bandwidth, model='c', pmax=5, ic='AIC'):
         r"""tau     -  quantile (0.1,...,1)
         """
-        n = y.size
+        n = len(y)
         y1 = y[:-1]  # creating lags
         dy = np.diff(y)  # first difference
         x = y1
@@ -104,7 +106,7 @@ class QADF:
             x = np.array(x[p:])
 
         # Running the quantile regression
-        n = y.size  # new
+        n = len(y)  # new
         qOut1 = sm.QuantReg(y, sm.add_constant(x)).fit(q=tau)
 
         # calculating rho
@@ -156,12 +158,12 @@ class QADF:
         if fz < 0:
             fz = 0.01
 
-        xx = np.ones((x.size, 1))
+        xx = np.ones((len(x), 1))
         if p > 0:
             xx = sm.add_constant(dyl)
 
         # Constructing a NxN matrix
-        PX = np.eye(xx.size) - \
+        PX = np.eye(len(xx)) - \
             xx.dot(np.linalg.inv(np.dot(xx.T, xx))).dot(xx.T)
         fzCrt = fz/np.sqrt(tau * (1 - tau))
         eqPX = np.sqrt(y1.T.dot(PX).dot(y1))
