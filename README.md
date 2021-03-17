@@ -79,21 +79,6 @@ CountryQADF = qADF.fitForQuantiles(y, quantiles)
 CountryQADF
 ```
 
-
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-    
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
 <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -254,8 +239,6 @@ CountryQADF
     </tr>
   </tbody>
 </table>
-</div>
-
 
 ```python
 repetitions = 1000
@@ -270,7 +253,7 @@ plt.show()
 ```
 
 
-![png](output_6_0.png)
+![png](README-images/output_6_0.png)
 
 ```python
 %%time
@@ -294,7 +277,7 @@ print('p-value:', pValue)
 ```
 
 
-![png](output_8_0.png)
+![png](README-images/output_8_0.png)
 
 
     tₙ(τ): 2.681
