@@ -3,7 +3,9 @@ import pandas as pd
 from scipy.stats import norm
 from statsmodels.api import add_constant, OLS, QuantReg
 from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.ar_model import AutoReg
 import numba
+
 
 class QADF:
     r"""Quantile unit root test
@@ -43,27 +45,51 @@ class QADF:
         self.ic = ic
         self.results = None
 
+    # Fitting data for different quantiles
+    @numba.jit(forceobj=True, parallel=True)
+    def fitForQuantiles(self, y, quantiles):
+        results = []
+        for tau in quantiles:
+            res = self.fit(y, tau)
+            results.append(res)
+        df = pd.DataFrame(results)
+
+        # Adding the QKS statistic
+        df['QKS'] = max(map(abs, df['tₙ(τ)']))
+        df['name'] = y.name
+        df.set_index('quantile', inplace=True)
+        return df
+
     def fit(self, y, tau):
         self.y = np.array(y)
         qrADF = self.QRADF(y, tau, self.crit_QRadf,
                            self.bandwidth, self.model, self.pmax, self.ic)
-        self.tau = qrADF['tau']
-        self.alpha_tau = qrADF['alpha_tau']
-        self.rho_tau = qrADF['rho_tau']
-        self.rho_ols = qrADF['rho_ols']
-        self.delta2 = qrADF['delta2']
-        self.QURadf = qrADF['QURadf']
-        self.cv = qrADF['cv']
+
+        # Exposing variables
+        self.tau = qrADF['τ']
         self.p = qrADF['p']
+        self.alpha_tau = qrADF['α\u2080(τ)']
+        self.rho_tau = qrADF['ρ\u2081(τ)']
+        self.rho_ols = qrADF['ρ\u2081(OLS)']
+        self.delta2 = qrADF['δ\u00B2']
+        self.QURadf = qrADF['t\u2099(τ)']
+        self.cvs = {
+            'CV10%': qrADF['CV10%'],
+            'CV5%': qrADF['CV5%'],
+            'CV1%': qrADF['CV1%']
+        }
+        self.rawResults = qrADF
         self.results = {
             'quantile': round(self.tau, 2),
             'Lags': self.p,
-            'alpha(quantile)': round(self.alpha_tau, 3),
-            'rho(quantile)': round(self.rho_tau, 3),
-            'rho (OLS)': round(self.rho_ols, 3),
-            'delta^2': round(self.delta2, 3),
-            'ADF(quantile)': round(self.QURadf, 3),
-            'Critical Values': round(self.cv, 3)
+            'α\u2080(τ)': round(self.alpha_tau, 3),
+            'ρ\u2081(τ)': round(self.rho_tau, 3),
+            'ρ\u2081(OLS)': round(self.rho_ols, 3),
+            'δ\u00B2': round(self.delta2, 3),
+            't\u2099(τ)': round(self.QURadf, 3),
+            'CV10%': self.cvs['CV10%'],
+            'CV5%': self.cvs['CV5%'],
+            'CV1%': self.cvs['CV1%']
         }
         return self.results
 
@@ -176,14 +202,16 @@ class QADF:
         cv = crit_QRadf(delta2, model)
 
         return {
-            'tau': tau,
-            'alpha_tau': alpha_tau,
-            'rho_tau': rho_tau,
-            'rho_ols': rho_ols,
-            'delta2': delta2,
-            'QURadf': QURadf,
-            'cv': cv,
-            'p': p
+            'τ': tau,
+            'p': p,
+            'α\u2080(τ)': alpha_tau,
+            'ρ\u2081(τ)': rho_tau,
+            'ρ\u2081(OLS)': rho_ols,
+            'δ\u00B2': delta2,
+            't\u2099(τ)': QURadf,
+            'CV10%': cv['10%'],
+            'CV5%': cv['5%'],
+            'CV1%': cv['1%']
         }
 
     @staticmethod
@@ -265,10 +293,49 @@ class QADF:
         if self.results != None:
             rmv_chars = {'}': '', '{': '', "'": ''}
             rmv_out = str(self.results).translate(str.maketrans(rmv_chars))
-            out = rmv_out.replace('Values: ', 'Values:\n').replace(
-                ',', '\n').replace('\n ', '\n')
+            out = rmv_out.replace(',', '\n').replace('\n ', '\n')
             return out
         return object.__repr__(self)
 
     def summary(self):
         print(self.__repr__())
+
+
+# Function that creates a bootstrap following Koenker and Xiao's (2004) resampling procedure
+def createBootstrap(y, lags, random_state=42):
+    # Data
+    dy = y.diff()[1:]
+    np.random.seed(random_state)
+    q = lags
+
+    # 1) The q-order autoregression
+    arModel = AutoReg(dy, lags=q, old_names=False, trend='n').fit()
+    betas = np.array(arModel.params)
+    resid = arModel.resid
+
+    # 2) Bootstrap sample from the empirical distribution of the centred residuals
+    cResid = resid - resid.mean()
+    residStar = np.random.choice(cResid, len(cResid))
+
+    # 3) where dy* = dy_j, j=1,..,q
+    dyStar = list(dy[:q])
+    for i in range(len(residStar)):
+        dyStar_t = (betas * dyStar[-q:]).sum() + residStar[i]
+        dyStar.append(dyStar_t)
+
+    # 4) Bootstrap samples of levels y_1* = y_1
+    yStar = [y[0]]
+    for i in range(len(dyStar)):
+        yStar_t = yStar[i] + dyStar[i]
+        yStar.append(yStar_t)
+
+    # Star series setup
+    yStar = pd.Series(yStar, index=y.index[:len(
+        y)], name=y.name+'Star'+str(random_state))
+    return yStar
+
+# Returns a dataframe of bootstraps
+def bootstraps(y, lags, n_replications):
+    boots = [createBootstrap(y, lags, random_state=i)
+             for i in range(n_replications)]
+    return pd.DataFrame(boots).T
