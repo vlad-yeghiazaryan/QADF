@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-import statsmodels.api as sm
+from statsmodels.api import add_constant, OLS, QuantReg
 from statsmodels.tsa.stattools import adfuller
 import numba
 
@@ -48,6 +48,7 @@ class QADF:
         qrADF = self.QRADF(y, tau, self.crit_QRadf,
                            self.bandwidth, self.model, self.pmax, self.ic)
         self.tau = qrADF['tau']
+        self.alpha_tau = qrADF['alpha_tau']
         self.rho_tau = qrADF['rho_tau']
         self.rho_ols = qrADF['rho_ols']
         self.delta2 = qrADF['delta2']
@@ -57,6 +58,7 @@ class QADF:
         self.results = {
             'quantile': round(self.tau, 2),
             'Lags': self.p,
+            'alpha(quantile)': round(self.alpha_tau, 3),
             'rho(quantile)': round(self.rho_tau, 3),
             'rho (OLS)': round(self.rho_ols, 3),
             'delta^2': round(self.delta2, 3),
@@ -107,11 +109,12 @@ class QADF:
 
         # Running the quantile regression
         n = len(y)  # new
-        qOut1 = sm.QuantReg(y, sm.add_constant(x)).fit(q=tau)
+        qOut1 = QuantReg(y, add_constant(x)).fit(q=tau)
 
-        # calculating rho
+        # calculating alpha and rho
+        alpha_tau = qOut1.params[0]
         rho_tau = qOut1.params[1]
-        rho_ols = sm.OLS(y, sm.add_constant(x)).fit().params[1]
+        rho_ols = OLS(y, add_constant(x)).fit().params[1]
 
         # calculating delta2 using covariance
         ind = qOut1.resid < 0
@@ -141,15 +144,15 @@ class QADF:
             x1 = np.c_[y1, dyl]
 
         # Running the other 2 QuantRegs
-        qOut2 = sm.QuantReg(y, sm.add_constant(x1)).fit(q=tau+h)
-        qOut3 = sm.QuantReg(y, sm.add_constant(x1)).fit(q=tau-h)
+        qOut2 = QuantReg(y, add_constant(x1)).fit(q=tau+h)
+        qOut3 = QuantReg(y, add_constant(x1)).fit(q=tau-h)
 
         # Extracting betas
         rq1 = qOut2.params
         rq2 = qOut3.params
 
         # Setting inputs for the unit root test
-        z = sm.add_constant(x1)
+        z = add_constant(x1)
         mz = z.mean(axis=0)
 
         q1 = np.matmul(mz, rq1)
@@ -160,7 +163,7 @@ class QADF:
 
         xx = np.ones((len(x), 1))
         if p > 0:
-            xx = sm.add_constant(dyl)
+            xx = add_constant(dyl)
 
         # Constructing a NxN matrix
         PX = np.eye(len(xx)) - \
@@ -174,6 +177,7 @@ class QADF:
 
         return {
             'tau': tau,
+            'alpha_tau': alpha_tau,
             'rho_tau': rho_tau,
             'rho_ols': rho_ols,
             'delta2': delta2,
