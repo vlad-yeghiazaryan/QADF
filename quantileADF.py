@@ -46,7 +46,6 @@ class QADF:
         self.results = None
 
     # Fitting data for different quantiles
-    @numba.jit(forceobj=True, parallel=True)
     def fitForQuantiles(self, y, quantiles):
         results = []
         for tau in quantiles:
@@ -93,17 +92,7 @@ class QADF:
         }
         return self.results
 
-    local = {
-        'y': numba.float32[:],
-        'model': numba.types.unicode_type,
-        'pmax': numba.types.int32,
-        'ic': numba.types.unicode_type,
-        'tau': numba.types.float32,
-        'adfuller': numba.types.pyfunc_type
-    }
-
     @staticmethod
-    @numba.jit(locals=local, forceobj=True, parallel=True)
     def QRADF(y, tau, crit_QRadf, bandwidth, model='c', pmax=5, ic='AIC'):
         r"""tau     -  quantile (0.1,...,1)
         """
