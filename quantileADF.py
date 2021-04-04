@@ -315,7 +315,7 @@ def QAR(y, tau, pmax=12, regression='c', ic='AIC'):
         'Lags': lags,
         'α₀(τ)': alpha_tau,
         'ρ₁(τ)': rho_tau,
-        'α₀': alpha_ols,
+        'α₀(OLS)': alpha_ols,
         'ρ₁(OLS)': rho_ols,
         'model(QAR)': qar,
         'model(OLS)': ols
