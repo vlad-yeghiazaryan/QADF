@@ -285,6 +285,42 @@ class QADF:
     def summary(self):
         print(self.__repr__())
 
+# Function for the quantile autoregression (to be used separately from QADF)
+def QAR(y, tau, pmax=12, regression='c', ic='AIC'):
+    L1_y =  lagmat(y, maxlag=1, use_pandas=True)[1:]  # creating lags
+    
+    # Identifying optimal lags
+    resultsADF = adfuller(y,pmax, regression, ic)
+    lags = resultsADF[2]
+    
+    Ldy = lagmat(y.diff()[1:], maxlag=lags, use_pandas=True).add_prefix('Δ')
+    X = pd.concat([L1_y, Ldy], axis=1)
+    
+    # endog and exog
+    y = y[lags+1:]
+    X = sm.add_constant(X)[lags:]
+    
+    # Running the quantile regression (also OLS)
+    qar = sm.QuantReg(y, X).fit(q=tau)
+    ols = sm.OLS(y, X).fit()
+
+    # calculating alpha and rho
+    alpha_tau = qar.params[0]
+    rho_tau = qar.params[1]
+    alpha_ols = ols.params[0]
+    rho_ols = ols.params[1]
+    
+    results =  {
+        'quantile': tau,
+        'Lags': lags,
+        'α₀(τ)': alpha_tau,
+        'ρ₁(τ)': rho_tau,
+        'α₀': alpha_ols,
+        'ρ₁(OLS)': rho_ols,
+        'model(QAR)': qar,
+        'model(OLS)': ols
+    }
+    return results
 
 # Function that creates a bootstrap following Koenker and Xiao's (2004) resampling procedure
 def createBootstrap(y, lags, random_state=42):
