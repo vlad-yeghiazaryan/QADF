@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 from statsmodels.api import add_constant, OLS, QuantReg
-from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import adfuller, lagmat
 from statsmodels.tsa.ar_model import AutoReg
 import numba
 
@@ -96,34 +96,30 @@ class QADF:
     def QRADF(y, tau, crit_QRadf, bandwidth, model='c', pmax=5, ic='AIC'):
         r"""tau     -  quantile (0.1,...,1)
         """
-        n = len(y)
-        y1 = y[:-1]  # creating lags
+        y = np.array(y)
+        y1 = lagmat(y, maxlag=1)[1:]  # creating lags
         dy = np.diff(y)  # first difference
         x = y1
+        
         resultsADF = adfuller(y, maxlag=pmax,
                               regression=model, autolag=ic)
         ADFt, p, cvADF = resultsADF[0], resultsADF[2], resultsADF[4]
-
+        
         # Defining series in case of possible legs
         if p > 0:
-            dyl = np.zeros((n, p))
-            for j in range(1, p+1):
-                dyl[j+1:, j-1] = dy[:-j]
-
-            y = np.array(y[p+1:])
-            y1 = np.array(y1[p:])
-            dy = np.array(dy[p:])
-            dyl = np.array(dyl[p+1:])
-            x = np.array(np.c_[y1, dyl])
+            dyl = lagmat(dy, maxlag=p)[p:]
+            x = np.c_[y1[p:], dyl]
         # If the ic decides not to include lags
-        elif p == 0:
-            y = np.array(y[p+1:])
-            y1 = np.array(y1[p:])
-            dy = np.array(dy[p:])
-            x = np.array(x[p:])
-
+        else:
+            x = x[p:]
+        
+        # Removing tails   
+        y = y[p+1:]
+        y1 = y1[p:]
+        dy = dy[p:]
+        
         # Running the quantile regression
-        n = len(y)  # new
+        n = len(y)
         qOut1 = QuantReg(y, add_constant(x)).fit(q=tau)
 
         # calculating alpha and rho
@@ -184,7 +180,7 @@ class QADF:
         PX = np.eye(len(xx)) - \
             xx.dot(np.linalg.inv(np.dot(xx.T, xx))).dot(xx.T)
         fzCrt = fz/np.sqrt(tau * (1 - tau))
-        eqPX = np.sqrt(y1.T.dot(PX).dot(y1))
+        eqPX = np.sqrt((y1.T.dot(PX).dot(y1))[0][0])
 
         # QADF statistic
         QURadf = fzCrt * eqPX * (rho_tau - 1)
