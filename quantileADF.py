@@ -298,11 +298,11 @@ def QAR(y, tau, pmax=12, regression='c', ic='AIC'):
     
     # endog and exog
     y = y[lags+1:]
-    X = sm.add_constant(X)[lags:]
+    X = add_constant(X)[lags:]
     
     # Running the quantile regression (also OLS)
-    qar = sm.QuantReg(y, X).fit(q=tau)
-    ols = sm.OLS(y, X).fit()
+    qar = QuantReg(y, X).fit(q=tau)
+    ols = OLS(y, X).fit()
 
     # calculating alpha and rho
     alpha_tau = qar.params[0]
