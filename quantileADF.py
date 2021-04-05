@@ -4,6 +4,7 @@ from scipy.stats import norm
 from statsmodels.api import add_constant, OLS, QuantReg
 from statsmodels.tsa.stattools import adfuller, lagmat
 from statsmodels.tsa.ar_model import AutoReg
+import matplotlib.pyplot as plt
 import numba
 
 
@@ -72,6 +73,7 @@ class QADF:
         self.rho_ols = qrADF['ρ\u2081(OLS)']
         self.delta2 = qrADF['δ\u00B2']
         self.QURadf = qrADF['t\u2099(τ)']
+        self.hl = qrADF['Half-lives']
         self.cvs = {
             'CV10%': qrADF['CV10%'],
             'CV5%': qrADF['CV5%'],
@@ -85,10 +87,11 @@ class QADF:
             'ρ\u2081(τ)': round(self.rho_tau, 3),
             'ρ\u2081(OLS)': round(self.rho_ols, 3),
             'δ\u00B2': round(self.delta2, 3),
+            'Half-lives': self.hl,
             't\u2099(τ)': round(self.QURadf, 3),
-            'CV10%': self.cvs['CV10%'],
-            'CV5%': self.cvs['CV5%'],
-            'CV1%': self.cvs['CV1%']
+            'CV10%': round(self.cvs['CV10%'], 4),
+            'CV5%': round(self.cvs['CV5%'], 4),
+            'CV1%': round(self.cvs['CV1%'], 4)
         }
         return self.results
 
@@ -126,6 +129,10 @@ class QADF:
         alpha_tau = qOut1.params[0]
         rho_tau = qOut1.params[1]
         rho_ols = OLS(y, add_constant(x)).fit().params[1]
+
+        # Estimating Half-lifes
+        hl = np.log(0.5)/np.log(np.abs(rho_tau))
+        hl = '∞' if hl < 0 else round(hl, 3)
 
         # calculating delta2 using covariance
         ind = qOut1.resid < 0
@@ -196,7 +203,8 @@ class QADF:
             't\u2099(τ)': QURadf,
             'CV10%': cv['10%'],
             'CV5%': cv['5%'],
-            'CV1%': cv['1%']
+            'CV1%': cv['1%'],
+            'Half-lives': hl
         }
 
     @staticmethod
@@ -360,3 +368,150 @@ def bootstraps(y, lags, n_replications):
     boots = [createBootstrap(y, lags, random_state=i)
              for i in range(n_replications)]
     return pd.DataFrame(boots).T
+
+# QAR class with a fit function that returns a statsmodels object
+class QAR():
+    """Quantile autoregressive model
+    """
+    defaultQuantiles = np.arange(0.1, 1, 0.1)
+    def __init__(self, y, pmax=12, regression='c', ic='AIC'):
+        """
+        Parameters
+        ----------
+        y : array or dataframe
+            endogenous/response variable.
+        pmax : int
+            Maximum lag which is included in test.
+        regression : {"c","ct","ctt","nc"}
+            Constant and trend order to include in regression.
+        ic : {"AIC", "BIC", "t-stat", None}
+            Information criteria to use when automatically determining the lag.
+        """
+        self.pmax = pmax
+        self.regression = regression
+        self.ic = ic
+        self.name = y.name
+        self.symbols = ['α₀', 'ρ₁']
+        
+        # Setup for endog and exog   
+        L1_y =  lagmat(y, maxlag=1, use_pandas=True)[1:]  # creating lags
+
+        # Identifying optimal lags
+        resultsADF = adfuller(y, self.pmax, self.regression, self.ic)
+        lags = resultsADF[2]
+
+        Ldy = lagmat(y.diff()[1:], maxlag=lags, use_pandas=True).add_prefix('Δ')
+        X = pd.concat([L1_y, Ldy], axis=1)
+
+        # endog and exog
+        self.y = y[lags+1:]
+        self.X = add_constant(X)[lags:]
+    
+    def fit(self, q=0.5):
+        # Running the quantile regression
+        return QuantReg(self.y, self.X).fit(q=q)
+    
+    # Internal param generation function
+    def _compareFit(self, q):
+        # QAR
+        qar = self.fit(q)
+        rhoName = qar.params.index[1]
+
+        #  alpha_tau 
+        alpha_tau = qar.params[0]
+        alpha_tauLowerCI = qar.conf_int().loc['const'][0]
+        alpha_tauUpperCI = qar.conf_int().loc['const'][1]
+
+        #  rho_tau 
+        rho_tau = qar.params[1]
+        rho_tauLowerCI = qar.conf_int().loc[rhoName][0]
+        rho_tauUpperCI = qar.conf_int().loc[rhoName][1]
+
+        #  OLS  
+        ols = OLS(self.y, self.X).fit()
+        rhoName = ols.params.index[1]
+
+        #  alphaOLS  
+        alphaOLS = ols.params[0]
+        alphaOLSLowerCI = ols.conf_int().loc['const'][0]
+        alphaOLSUpperCI = ols.conf_int().loc['const'][1]
+
+        #  rhoOLS
+        rhoOLS = ols.params[1]
+        rhoOLSLowerCI = ols.conf_int().loc[rhoName][0]
+        rhoOLSUpperCI = ols.conf_int().loc[rhoName][1]
+
+        params = {
+            'quantile': q,
+            'α₀(τ)': alpha_tau,
+            'α₀(τ):LB': alpha_tauLowerCI,
+            'α₀(τ):UB': alpha_tauUpperCI,
+            'α₀(OLS)': alphaOLS,
+            'α₀(OLS):LB': alphaOLSLowerCI,
+            'α₀(OLS):UB': alphaOLSUpperCI,
+            'ρ₁(τ)': rho_tau,
+            'ρ₁(τ):LB': rho_tauLowerCI,
+            'ρ₁(τ):UB': rho_tauUpperCI,
+            'ρ₁(OLS)': rhoOLS,
+            'ρ₁(OLS):LB': rhoOLSLowerCI,
+            'ρ₁(OLS):UB': rhoOLSUpperCI,
+        }
+        return params
+    
+    # Creates a single plot for a parameter
+    def _paramPlot(self, param, index, quantiles, fig, nrows, ncolumns):
+        # Fitting for many quantiles and plotting
+        fits = pd.DataFrame([self._compareFit(q) for q in quantiles])
+        x = fits['quantile']
+        param_tau = param + '(τ)'
+        param_tauLower = param_tau + ':LB'
+        param_tauUpper = param_tau + ':UB'
+        paramOLS = param + '(OLS)'
+        paramOLSLower = paramOLS + ':LB'
+        paramOLSUpper = paramOLS + ':UB'
+
+        axs = fig.add_subplot(nrows, ncolumns, index)
+        # α₀(τ) over quantiles
+        axs.plot(x, fits[param_tau], color='black', label=param_tau)
+        axs.plot(x, fits[param_tauLower], linestyle='dotted', color='black')
+        axs.plot(x, fits[param_tauUpper], linestyle='dotted', color='black')
+
+        # OLS constant α₀(OLS)
+        axs.plot(x, fits[paramOLS], color='blue', label=paramOLS)
+        axs.plot(x, fits[paramOLSLower], linestyle='dotted', color='blue')
+        axs.plot(x, fits[paramOLSUpper], linestyle='dotted', color='blue')
+
+        axs.set_ylabel(param, fontsize=15)
+        axs.legend(loc='lower right')
+
+    def summaryPlot(self, quantiles=defaultQuantiles, figsize=(8, 4), nrows=2, ncolumns=1):
+        # For each symbol create a plot
+        fig = plt.figure(figsize=figsize)
+        for index, symbol in enumerate(self.symbols):
+            self._paramPlot(symbol, (index+1), quantiles, fig, nrows, ncolumns)
+            
+        # common figure parameters
+        fig.suptitle(self.name)
+        plt.xlabel('Quantiles', fontsize=11)
+        return fig
+
+# Plotting data for multiple series on a 2xn plane with 'α₀' and 'ρ₁' as main rows
+def comparisonPlot(data, figsize=(15, 8), quantiles=QAR.defaultQuantiles):
+    n = len(data.columns)
+    fig = plt.figure(figsize=figsize)
+    for index, country in enumerate(data):
+        y = data[country]
+        model = QAR(y)
+        for s_index, symbol in enumerate(model.symbols):
+            uback = index + (n*s_index + 1)
+            model._paramPlot(symbol, uback, quantiles, fig, nrows=2, ncolumns=n)
+        fig.axes[index*2].set_title(model.name)
+    return fig
+    
+    # Cleanup   
+    fig.axes[0].get_shared_y_axes().join(*fig.axes[::2])
+    fig.axes[1].get_shared_y_axes().join(*fig.axes[1::2])
+    list(map(lambda axes: axes.set_xticklabels([]), fig.axes[::2]))
+    list(map(lambda axes: axes.set_yticklabels([]), fig.axes[2::2]))
+    list(map(lambda axes: axes.set_yticklabels([]), fig.axes[3::2]))
+    return fig
