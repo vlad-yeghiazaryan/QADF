@@ -335,7 +335,7 @@ def createBootstrap(y, lags, random_state=42):
     # Data
     dy = y.diff()[1:]
     np.random.seed(random_state)
-    q = lags
+    q = lags if lags > 0 else 1
 
     # 1) The q-order autoregression
     arModel = AutoReg(dy, lags=q, old_names=False, trend='n').fit()
