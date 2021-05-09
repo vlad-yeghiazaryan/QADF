@@ -5,23 +5,23 @@ Parts of the code/logic such as formulas for the bandwidth and critical values (
 
 ## Usage
 ```python
-y = pd.read_csv('examples.csv', index_col=0, squeeze=True)
+y = pd.read_csv('data/examples.csv', index_col=0, squeeze=True)
 y.index = pd.date_range('2000-01-01', '2020-11-01', freq='MS')
 qADF = QADF(model='c', pmax=5, ic='AIC')
 qADF.fit(y, tau=0.42)
 qADF.summary()
 ```
-
     quantile: 0.42
     Lags: 2
     α₀(τ): 2.15
     ρ₁(τ): 0.973
     ρ₁(OLS): 0.968
     δ²: 0.278
+    Half-lives: 25.461
     tₙ(τ): -2.916
-    CV10%: -2.027126462017193
-    CV5%: -2.373528690016954
-    CV1%: -3.0307336125563666
+    CV10%: -2.0271
+    CV5%: -2.3735
+    CV1%: -3.0307
 
 ## Notebook example
 ```python
@@ -36,17 +36,14 @@ from statsmodels.tools.sm_exceptions import IterationLimitWarning
 warnings.simplefilter('ignore', IterationLimitWarning)
 ```
 
-
 ```python
-y = pd.read_csv('examples.csv', index_col=0, squeeze=True)
+y = pd.read_csv('data/examples.csv', index_col=0, squeeze=True)
 y.index = pd.date_range('2000-01-01', '2020-11-01', freq='MS')
 ```
-
 
 ```python
 y.head()
 ```
-
 
     2000-01-01    74.340017
     2000-02-01    75.456058
@@ -68,10 +65,12 @@ qADF.summary()
     ρ₁(τ): 0.973
     ρ₁(OLS): 0.968
     δ²: 0.278
+    Half-lives: 25.461
     tₙ(τ): -2.916
-    CV10%: -2.027126462017193
-    CV5%: -2.373528690016954
-    CV1%: -3.0307336125563666
+    CV10%: -2.0271
+    CV5%: -2.3735
+    CV1%: -3.0307
+
 
 ```python
 quantiles = np.arange(0.1, 1, 0.1)
@@ -88,6 +87,7 @@ CountryQADF
       <th>ρ₁(τ)</th>
       <th>ρ₁(OLS)</th>
       <th>δ²</th>
+      <th>Half-lives</th>
       <th>tₙ(τ)</th>
       <th>CV10%</th>
       <th>CV5%</th>
@@ -97,6 +97,7 @@ CountryQADF
     </tr>
     <tr>
       <th>quantile</th>
+      <th></th>
       <th></th>
       <th></th>
       <th></th>
@@ -118,10 +119,11 @@ CountryQADF
       <td>1.002</td>
       <td>0.968</td>
       <td>0.328</td>
+      <td>∞</td>
       <td>0.058</td>
-      <td>-2.088537</td>
-      <td>-2.429807</td>
-      <td>-3.083911</td>
+      <td>-2.0885</td>
+      <td>-2.4298</td>
+      <td>-3.0839</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -132,10 +134,11 @@ CountryQADF
       <td>0.991</td>
       <td>0.968</td>
       <td>0.307</td>
+      <td>73.523</td>
       <td>-0.558</td>
-      <td>-2.064626</td>
-      <td>-2.406581</td>
-      <td>-3.067762</td>
+      <td>-2.0646</td>
+      <td>-2.4066</td>
+      <td>-3.0678</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -146,10 +149,11 @@ CountryQADF
       <td>0.978</td>
       <td>0.968</td>
       <td>0.289</td>
+      <td>31.646</td>
       <td>-2.061</td>
-      <td>-2.041454</td>
-      <td>-2.385845</td>
-      <td>-3.045965</td>
+      <td>-2.0415</td>
+      <td>-2.3858</td>
+      <td>-3.0460</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -160,10 +164,11 @@ CountryQADF
       <td>0.974</td>
       <td>0.968</td>
       <td>0.280</td>
+      <td>26.503</td>
       <td>-2.681</td>
-      <td>-2.028772</td>
-      <td>-2.374943</td>
-      <td>-3.032483</td>
+      <td>-2.0288</td>
+      <td>-2.3749</td>
+      <td>-3.0325</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -174,10 +179,11 @@ CountryQADF
       <td>0.975</td>
       <td>0.968</td>
       <td>0.277</td>
+      <td>27.527</td>
       <td>-2.512</td>
-      <td>-2.025065</td>
-      <td>-2.371757</td>
-      <td>-3.028542</td>
+      <td>-2.0251</td>
+      <td>-2.3718</td>
+      <td>-3.0285</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -188,10 +194,11 @@ CountryQADF
       <td>0.976</td>
       <td>0.968</td>
       <td>0.266</td>
+      <td>28.12</td>
       <td>-2.016</td>
-      <td>-2.009642</td>
-      <td>-2.358499</td>
-      <td>-3.012146</td>
+      <td>-2.0096</td>
+      <td>-2.3585</td>
+      <td>-3.0121</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -202,10 +209,11 @@ CountryQADF
       <td>0.972</td>
       <td>0.968</td>
       <td>0.250</td>
+      <td>24.476</td>
       <td>-2.058</td>
-      <td>-1.986725</td>
-      <td>-2.338800</td>
-      <td>-2.987783</td>
+      <td>-1.9867</td>
+      <td>-2.3388</td>
+      <td>-2.9878</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -216,10 +224,11 @@ CountryQADF
       <td>0.986</td>
       <td>0.968</td>
       <td>0.228</td>
+      <td>48.461</td>
       <td>-0.969</td>
-      <td>-1.955893</td>
-      <td>-2.312298</td>
-      <td>-2.955006</td>
+      <td>-1.9559</td>
+      <td>-2.3123</td>
+      <td>-2.9550</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -230,10 +239,11 @@ CountryQADF
       <td>0.973</td>
       <td>0.968</td>
       <td>0.168</td>
+      <td>24.866</td>
       <td>-1.232</td>
-      <td>-1.865309</td>
-      <td>-2.227611</td>
-      <td>-2.873084</td>
+      <td>-1.8653</td>
+      <td>-2.2276</td>
+      <td>-2.8731</td>
       <td>2.681</td>
       <td>Ukraine</td>
     </tr>
@@ -245,13 +255,11 @@ repetitions = 1000
 boots = bootstraps(y, lags=2, n_replications=repetitions)
 ```
 
-
 ```python
 pd.DataFrame(boots).plot(kind='line', legend=False, figsize=(10,5))
 y.plot(legend=True, color='black')
 plt.show()
 ```
-
 
 ![png](README-images/output_6_0.png)
 
@@ -276,9 +284,7 @@ print('Confidence interval:',conf_int)
 print('p-value:', pValue)
 ```
 
-
 ![png](README-images/output_8_0.png)
-
 
     tₙ(τ): 2.681
     Confidence interval: [2.7542  3.1293  3.74112]
