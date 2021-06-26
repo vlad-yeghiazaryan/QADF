@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 from statsmodels.api import add_constant, OLS, QuantReg
-from statsmodels.tsa.stattools import adfuller, lagmat
+from statsmodels.tsa.stattools import adfuller, lagmat, add_trend
 from statsmodels.tsa.ar_model import AutoReg
 import matplotlib.pyplot as plt
 import numba
@@ -15,74 +15,212 @@ class QADF:
 
     Parameters
     ----------
-    y       -  Nx1 matrix, data,
-
-    model   -   nc = No constant, no trend.
-                c  = Constant (Default in Koenker & Xiao (2004)
-                ct = Constant and trend,
-
-    pmax    -  Maximum number of lags for Dy
-
-    ic      -  Information Criterion:
-                "AIC     = Akaike
+    endog   -  Nx1 matrix. Preferably pandas series or a numpy array.
+    model   -   c  = Constant (Default in Koenker & Xiao (2004)).
+                ct = Constant and trend.
+    pmax    -  Maximum number of lags for dy (serially correlated terms).
+    ic      -  Information Criterion: Default: AIC
+                "AIC"    = Akaike
                 "BIC"    = Schwarz
                 "t-stat" = t-stat significance
-
-    tau     -  quantile (0.1,...,1)
+    exog    -  Additional exogenous variables to be included in the estimation. Default: None
 
     Returns
     -------
-    rho(quantile) - the estimated rho parameter for a given quantile
-    rho (OLS)     - the estimated rho parameter for usual OLS estimation
-    delta2        - see equation (10) at page 778
-    tn(quantile)  - quantile unit root statistic (t-ratio for a given quantile)
-    cv            - 1%, 5%, 10% critical values for the estimated delta2
+    τ (quantile)  - the quantile for which the regression was estimated for.
+    Lags          - the effective number of lags determined through the information criterion.
+    α₀(τ)         - the magnitude of the shock.
+    ρ₁(τ)         - the estimated rho parameter for a given quantile. The speed of mean reversion.
+    ρ₁(OLS)       - the estimated rho parameter for the OLS estimation.
+    δ²            - A nuisance parameter used to estimate critical values. See equation (10) at page 778.
+    Half-lives    - ln(0.5)/ln(abs(ρ₁(τ))).
+    tₙ(τ)          - the quantile unit root statistic (t-ratio for a given quantile).
+    cv            - 1%, 5%, 10% critical values for the estimated δ².
 
     """
 
-    def __init__(self, model='c', pmax=5, ic='AIC'):
+    def __init__(self, endog, model='c', pmax=5, ic='AIC', exog=None):
+        # setup
+        if type(endog) != pd.Series:
+            self.endog = pd.Series(endog, name='y')
+        else:
+            self.endog = endog
         self.model = model
         self.pmax = pmax
         self.ic = ic
         self.results = None
 
+        # Creating endog and exog
+        y1 = pd.DataFrame(self.endog.shift(1)[1:]).add_suffix(
+            '.L1')  # creating lags
+        dy = self.endog.diff(1)[1:]  # first difference
+        X = y1
+
+        resultsADF = adfuller(self.endog, maxlag=self.pmax,
+                              regression=model, autolag=self.ic)
+        ADFt, p, cvADF = resultsADF[0], resultsADF[2], resultsADF[4]
+
+        # Defining series in case of possible legs
+        if p > 0:
+            dyl = pd.DataFrame(lagmat(dy, maxlag=p), index=dy.index,
+                               columns=['Diff.L' + str(i) for i in range(1, 1 + p)])[p:]
+            X = pd.concat([y1[p:], dyl], axis=1)
+        # If the ic decides not to include lags
+        else:
+            X = X[p:]
+
+        # Removing tails
+        self.lags = p
+        self.extraExog = exog[p + 1:]
+        self.L1 = y1[p:]
+        self.diff = dy[p:]
+        self.diffLags = dyl if self.lags > 0 else None
+        self.endog = self.endog[p + 1:]
+        if self.model == 'c':
+            self.exog = add_constant(X)
+        elif self.model == 'ct':
+            self.exog = add_trend(add_constant(X), 'ct')
+        else:
+            raise ValueError(
+                'Model type is not recognized: ' + str(self.model))
+
+        # Adding additional exog if present
+        self.exog = pd.concat([self.exog, self.extraExog], axis=1)
+
     # Fitting data for different quantiles
-    def fitForQuantiles(self, y, quantiles):
+    def fitForQuantiles(self, quantiles):
+        r"""quantiles -  A list like array of the quantiles to perform the fitting.
+            example: np.arange(0.1, 1, 0.1)
+        """
         results = []
         for tau in quantiles:
-            res = self.fit(y, tau)
-            results.append(res)
+            res = self.fit(tau)
+            results.append(res.results)
         df = pd.DataFrame(results)
 
         # Adding the QKS statistic
         df['QKS'] = max(map(abs, df['tₙ(τ)']))
-        df['name'] = y.name
+        df['name'] = self.endog.name
         df.set_index('quantile', inplace=True)
         return df
 
-    def fit(self, y, tau):
-        self.y = np.array(y)
-        qrADF = self.QRADF(y, tau, self.crit_QRadf,
-                           self.bandwidth, self.model, self.pmax, self.ic)
+    def fit(self, tau):
+        r"""tau -  quantile (ranges: 0.1,...,1)
+        """
+        # Running the quantile regression
+        n = len(self.endog)
+        qOut1 = QuantReg(self.endog, self.exog).fit(q=tau)
+
+        # calculating alpha and rho
+        alpha_tau = qOut1.params[0]
+        rho_tau = qOut1.params[1]
+        rho_ols = OLS(self.endog, self.exog).fit().params[1]
+
+        # Estimating Half-lifes
+        hl = np.log(0.5) / np.log(np.abs(rho_tau))
+        hl = '∞' if hl < 0 else round(hl, 3)
+
+        # calculating delta2 using covariance
+        ind = qOut1.resid < 0
+        phi = tau - ind
+        w = self.diff
+        cov = np.cov(phi, w)[0, 1]
+        delta2 = (cov / (np.std(w, ddof=1) * np.sqrt(tau * (1 - tau)))) ** 2
+
+        # calculating critical values associate with our delta2
+        crv = self.crit_QRadf(delta2, self.model)
+
+        # Calculating quantile bandwidth
+        h = self.bandwidth(tau, n, True)
+        if tau <= 0.5 and h > tau:
+            h = self.bandwidth(tau, n, False)
+            if h > tau:
+                h = tau / 1.5
+
+        if tau > 0.5 and h > 1 - tau:
+            h = self.bandwidth(tau, n, False)
+            if h > (1 - tau):
+                h = (1 - tau) / 1.5
+
+        # Defining some inputs
+        y1 = pd.DataFrame(self.endog.shift(
+            1)[1:]).add_suffix('.L1')[self.lags:]
+        if self.model == 'c':
+            X = add_constant(y1)
+        elif self.model == 'ct':
+            X = add_trend(add_constant(y1), 'ct')
+        else:
+            raise ValueError(
+                'Model type is not recognized: ' + str(self.model))
+
+        X = pd.concat([X, self.extraExog], axis=1)
+
+        # The common case
+        if self.lags > 0:
+            X = self.exog
+
+        # Running the other 2 QuantRegs
+        qOut2 = QuantReg(self.endog, X).fit(q=tau + h)
+        qOut3 = QuantReg(self.endog, X).fit(q=tau - h)
+
+        # Extracting betas
+        rq1 = qOut2.params
+        rq2 = qOut3.params
+
+        # Setting inputs for the unit root test
+        z = X
+        mz = z.mean(axis=0)
+
+        q1 = np.matmul(mz, rq1)
+        q2 = np.matmul(mz, rq2)
+        fz = 2 * h / (q1 - q2)
+        if fz < 0:
+            fz = 0.01
+
+        xx = np.ones((len(X), 1))
+        if self.lags > 0:
+            if self.model == 'c':
+                xx = add_constant(self.diffLags)
+            elif self.model == 'ct':
+                xx = add_trend(add_constant(self.diffLags), 'ct')
+            else:
+                raise ValueError(
+                    'Model type is not recognized: ' + str(self.model))
+
+        # Adding extra exog
+        xx = pd.concat([xx, self.extraExog], axis=1)
+
+        # aligning matrices
+        xx = np.array(xx)
+        y1 = np.array(self.L1)
+
+        # Constructing a NxN matrix
+        PX = np.eye(len(xx)) - \
+            xx.dot(np.linalg.inv(np.dot(xx.T, xx))).dot(xx.T)
+        fzCrt = fz / np.sqrt(tau * (1 - tau))
+        eqPX = np.sqrt((y1.T.dot(PX).dot(y1))[0][0])
+
+        # QADF statistic
+        QURadf = fzCrt * eqPX * (rho_tau - 1)
+        cv = self.crit_QRadf(delta2, self.model)
 
         # Exposing variables
-        self.tau = qrADF['τ']
-        self.p = qrADF['p']
-        self.alpha_tau = qrADF['α\u2080(τ)']
-        self.rho_tau = qrADF['ρ\u2081(τ)']
-        self.rho_ols = qrADF['ρ\u2081(OLS)']
-        self.delta2 = qrADF['δ\u00B2']
-        self.QURadf = qrADF['t\u2099(τ)']
-        self.hl = qrADF['Half-lives']
+        self.tau = tau
+        self.alpha_tau = alpha_tau
+        self.rho_tau = rho_tau
+        self.rho_ols = rho_ols
+        self.delta2 = delta2
+        self.QURadf = QURadf
+        self.hl = hl
+        self.regression = qOut1
         self.cvs = {
-            'CV10%': qrADF['CV10%'],
-            'CV5%': qrADF['CV5%'],
-            'CV1%': qrADF['CV1%']
+            'CV10%': cv['10%'],
+            'CV5%': cv['5%'],
+            'CV1%': cv['1%']
         }
-        self.rawResults = qrADF
         self.results = {
             'quantile': round(self.tau, 2),
-            'Lags': self.p,
+            'Lags': self.lags,
             'α\u2080(τ)': round(self.alpha_tau, 3),
             'ρ\u2081(τ)': round(self.rho_tau, 3),
             'ρ\u2081(OLS)': round(self.rho_ols, 3),
@@ -93,119 +231,7 @@ class QADF:
             'CV5%': round(self.cvs['CV5%'], 4),
             'CV1%': round(self.cvs['CV1%'], 4)
         }
-        return self.results
-
-    @staticmethod
-    def QRADF(y, tau, crit_QRadf, bandwidth, model='c', pmax=5, ic='AIC'):
-        r"""tau     -  quantile (0.1,...,1)
-        """
-        y = np.array(y)
-        y1 = lagmat(y, maxlag=1)[1:]  # creating lags
-        dy = np.diff(y)  # first difference
-        x = y1
-        
-        resultsADF = adfuller(y, maxlag=pmax,
-                              regression=model, autolag=ic)
-        ADFt, p, cvADF = resultsADF[0], resultsADF[2], resultsADF[4]
-        
-        # Defining series in case of possible legs
-        if p > 0:
-            dyl = lagmat(dy, maxlag=p)[p:]
-            x = np.c_[y1[p:], dyl]
-        # If the ic decides not to include lags
-        else:
-            x = x[p:]
-        
-        # Removing tails   
-        y = y[p+1:]
-        y1 = y1[p:]
-        dy = dy[p:]
-        
-        # Running the quantile regression
-        n = len(y)
-        qOut1 = QuantReg(y, add_constant(x)).fit(q=tau)
-
-        # calculating alpha and rho
-        alpha_tau = qOut1.params[0]
-        rho_tau = qOut1.params[1]
-        rho_ols = OLS(y, add_constant(x)).fit().params[1]
-
-        # Estimating Half-lifes
-        hl = np.log(0.5)/np.log(np.abs(rho_tau))
-        hl = '∞' if hl < 0 else round(hl, 3)
-
-        # calculating delta2 using covariance
-        ind = qOut1.resid < 0
-        phi = tau - ind
-        w = dy
-        cov = np.cov(phi, w)[0, 1]
-        delta2 = (cov / (np.std(w, ddof=1) * np.sqrt(tau * (1 - tau)))) ** 2
-
-        # calculating critical values associate with our delta2
-        crv = crit_QRadf(delta2, model)
-
-        # Calculating quantile bandwidth
-        h = bandwidth(tau, n, True)
-        if tau <= 0.5 and h > tau:
-            h = bandwidth(tau, n, False)
-            if h > tau:
-                h = tau/1.5
-
-        if tau > 0.5 and h > 1-tau:
-            h = bandwidth(tau, n, False)
-            if h > (1 - tau):
-                h = (1-tau)/1.5
-
-        # Defining some inputs
-        x1 = y1
-        if p > 0:
-            x1 = np.c_[y1, dyl]
-
-        # Running the other 2 QuantRegs
-        qOut2 = QuantReg(y, add_constant(x1)).fit(q=tau+h)
-        qOut3 = QuantReg(y, add_constant(x1)).fit(q=tau-h)
-
-        # Extracting betas
-        rq1 = qOut2.params
-        rq2 = qOut3.params
-
-        # Setting inputs for the unit root test
-        z = add_constant(x1)
-        mz = z.mean(axis=0)
-
-        q1 = np.matmul(mz, rq1)
-        q2 = np.matmul(mz, rq2)
-        fz = 2 * h/(q1 - q2)
-        if fz < 0:
-            fz = 0.01
-
-        xx = np.ones((len(x), 1))
-        if p > 0:
-            xx = add_constant(dyl)
-
-        # Constructing a NxN matrix
-        PX = np.eye(len(xx)) - \
-            xx.dot(np.linalg.inv(np.dot(xx.T, xx))).dot(xx.T)
-        fzCrt = fz/np.sqrt(tau * (1 - tau))
-        eqPX = np.sqrt((y1.T.dot(PX).dot(y1))[0][0])
-
-        # QADF statistic
-        QURadf = fzCrt * eqPX * (rho_tau - 1)
-        cv = crit_QRadf(delta2, model)
-
-        return {
-            'τ': tau,
-            'p': p,
-            'α\u2080(τ)': alpha_tau,
-            'ρ\u2081(τ)': rho_tau,
-            'ρ\u2081(OLS)': rho_ols,
-            'δ\u00B2': delta2,
-            't\u2099(τ)': QURadf,
-            'CV10%': cv['10%'],
-            'CV5%': cv['5%'],
-            'CV1%': cv['1%'],
-            'Half-lives': hl
-        }
+        return self
 
     @staticmethod
     @numba.jit(forceobj=True, parallel=True)
@@ -214,13 +240,13 @@ class QADF:
         f0 = norm.pdf(x0)  # Probability density function
 
         if is_hs:
-            a = n**(-1/3)
-            b = norm.ppf(1 - alpha/2)**(2/3)
-            c = ((1.5 * f0**2)/(2 * x0**2+1))**(1/3)
+            a = n**(-1 / 3)
+            b = norm.ppf(1 - alpha / 2)**(2 / 3)
+            c = ((1.5 * f0**2) / (2 * x0**2 + 1))**(1 / 3)
 
             h = a * b * c
         else:
-            h = n**(-0.2) * ((4.5 * f0**4)/(2 * x0**2 + 1)**2)**0.2
+            h = n**(-0.2) * ((4.5 * f0**4) / (2 * x0**2 + 1)**2)**0.2
 
         return h
 
@@ -278,59 +304,25 @@ class QADF:
                 r2a = int(np.floor(r210))
                 r2b = int(np.ceil(r210))
                 wa = r2b - r210
-                ct = wa * crt.iloc[(r2a-1), :] + (1 - wa) * \
-                    crt.iloc[(r2b-1), :]
+                ct = wa * crt.iloc[(r2a - 1), :] + (1 - wa) * \
+                    crt.iloc[(r2b - 1), :]
         return ct
 
     def __repr__(self):
+        return object.__repr__(self.regression)
+
+    def summary(self):
         if self.results != None:
             rmv_chars = {'}': '', '{': '', "'": ''}
             rmv_out = str(self.results).translate(str.maketrans(rmv_chars))
             out = rmv_out.replace(',', '\n').replace('\n ', '\n')
-            return out
-        return object.__repr__(self)
-
-    def summary(self):
-        print(self.__repr__())
-
-# Function for the quantile autoregression (to be used separately from QADF)
-def QAR(y, tau, pmax=12, regression='c', ic='AIC'):
-    L1_y =  lagmat(y, maxlag=1, use_pandas=True)[1:]  # creating lags
-    
-    # Identifying optimal lags
-    resultsADF = adfuller(y,pmax, regression, ic)
-    lags = resultsADF[2]
-    
-    Ldy = lagmat(y.diff()[1:], maxlag=lags, use_pandas=True).add_prefix('Δ')
-    X = pd.concat([L1_y, Ldy], axis=1)
-    
-    # endog and exog
-    y = y[lags+1:]
-    X = add_constant(X)[lags:]
-    
-    # Running the quantile regression (also OLS)
-    qar = QuantReg(y, X).fit(q=tau)
-    ols = OLS(y, X).fit()
-
-    # calculating alpha and rho
-    alpha_tau = qar.params[0]
-    rho_tau = qar.params[1]
-    alpha_ols = ols.params[0]
-    rho_ols = ols.params[1]
-    
-    results =  {
-        'quantile': tau,
-        'Lags': lags,
-        'α₀(τ)': alpha_tau,
-        'ρ₁(τ)': rho_tau,
-        'α₀(OLS)': alpha_ols,
-        'ρ₁(OLS)': rho_ols,
-        'model(QAR)': qar,
-        'model(OLS)': ols
-    }
-    return results
+            print(out)
+        else:
+            return object.__repr__(self)
 
 # Function that creates a bootstrap following Koenker and Xiao's (2004) resampling procedure
+
+
 def createBootstrap(y, lags, random_state=42):
     # Data
     dy = y.diff()[1:]
@@ -360,21 +352,26 @@ def createBootstrap(y, lags, random_state=42):
 
     # Star series setup
     yStar = pd.Series(yStar, index=y.index[:len(
-        y)], name=y.name+'Star'+str(random_state))
+        y)], name=y.name + 'Star' + str(random_state))
     return yStar
 
 # Returns a dataframe of bootstraps
+
+
 def bootstraps(y, lags, n_replications):
     boots = [createBootstrap(y, lags, random_state=i)
              for i in range(n_replications)]
     return pd.DataFrame(boots).T
 
 # QAR class with a fit function that returns a statsmodels object
+
+
 class QAR():
     """Quantile autoregressive model
     """
     defaultQuantiles = np.arange(0.1, 1, 0.1)
-    def __init__(self, y, pmax=12, regression='c', ic='AIC'):
+
+    def __init__(self, y, exog=None, pmax=12, regression='c', ic='AIC'):
         """
         Parameters
         ----------
@@ -392,46 +389,48 @@ class QAR():
         self.ic = ic
         self.name = y.name
         self.symbols = ['α₀', 'ρ₁']
-        
-        # Setup for endog and exog   
-        L1_y =  lagmat(y, maxlag=1, use_pandas=True)[1:]  # creating lags
+
+        # Setup for endog and exog
+        L1_y = lagmat(y, maxlag=1, use_pandas=True)[1:]  # creating lags
+        exog = exog[1:] if exog is not None else exog
 
         # Identifying optimal lags
         resultsADF = adfuller(y, self.pmax, self.regression, self.ic)
         lags = resultsADF[2]
 
-        Ldy = lagmat(y.diff()[1:], maxlag=lags, use_pandas=True).add_prefix('Δ')
-        X = pd.concat([L1_y, Ldy], axis=1)
+        Ldy = lagmat(y.diff()[1:], maxlag=lags,
+                     use_pandas=True).add_prefix('Δ')
+        X = pd.concat([L1_y, Ldy, exog], axis=1)
 
         # endog and exog
-        self.y = y[lags+1:]
+        self.y = y[lags + 1:]
         self.X = add_constant(X)[lags:]
-    
+
     def fit(self, q=0.5):
         # Running the quantile regression
         return QuantReg(self.y, self.X).fit(q=q)
-    
+
     # Internal param generation function
     def _compareFit(self, q):
         # QAR
         qar = self.fit(q)
         rhoName = qar.params.index[1]
 
-        #  alpha_tau 
+        #  alpha_tau
         alpha_tau = qar.params[0]
         alpha_tauLowerCI = qar.conf_int().loc['const'][0]
         alpha_tauUpperCI = qar.conf_int().loc['const'][1]
 
-        #  rho_tau 
+        #  rho_tau
         rho_tau = qar.params[1]
         rho_tauLowerCI = qar.conf_int().loc[rhoName][0]
         rho_tauUpperCI = qar.conf_int().loc[rhoName][1]
 
-        #  OLS  
+        #  OLS
         ols = OLS(self.y, self.X).fit()
         rhoName = ols.params.index[1]
 
-        #  alphaOLS  
+        #  alphaOLS
         alphaOLS = ols.params[0]
         alphaOLSLowerCI = ols.conf_int().loc['const'][0]
         alphaOLSUpperCI = ols.conf_int().loc['const'][1]
@@ -457,7 +456,7 @@ class QAR():
             'ρ₁(OLS):UB': rhoOLSUpperCI,
         }
         return params
-    
+
     # Creates a single plot for a parameter
     def _paramPlot(self, param, index, quantiles, fig, nrows, ncolumns):
         # Fitting for many quantiles and plotting
@@ -488,14 +487,17 @@ class QAR():
         # For each symbol create a plot
         fig = plt.figure(figsize=figsize)
         for index, symbol in enumerate(self.symbols):
-            self._paramPlot(symbol, (index+1), quantiles, fig, nrows, ncolumns)
-            
+            self._paramPlot(symbol, (index + 1), quantiles,
+                            fig, nrows, ncolumns)
+
         # common figure parameters
         fig.suptitle(self.name)
         plt.xlabel('Quantiles', fontsize=11)
         return fig
 
 # Plotting data for multiple series on a 2xn plane with 'α₀' and 'ρ₁' as main rows
+
+
 def comparisonPlot(data, figsize=(15, 8), quantiles=QAR.defaultQuantiles):
     n = len(data.columns)
     fig = plt.figure(figsize=figsize)
@@ -503,12 +505,13 @@ def comparisonPlot(data, figsize=(15, 8), quantiles=QAR.defaultQuantiles):
         y = data[country]
         model = QAR(y)
         for s_index, symbol in enumerate(model.symbols):
-            uback = index + (n*s_index + 1)
-            model._paramPlot(symbol, uback, quantiles, fig, nrows=2, ncolumns=n)
-        fig.axes[index*2].set_title(model.name)
+            uback = index + (n * s_index + 1)
+            model._paramPlot(symbol, uback, quantiles,
+                             fig, nrows=2, ncolumns=n)
+        fig.axes[index * 2].set_title(model.name)
     return fig
-    
-    # Cleanup   
+
+    # Cleanup
     fig.axes[0].get_shared_y_axes().join(*fig.axes[::2])
     fig.axes[1].get_shared_y_axes().join(*fig.axes[1::2])
     list(map(lambda axes: axes.set_xticklabels([]), fig.axes[::2]))
