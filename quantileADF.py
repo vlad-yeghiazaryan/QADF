@@ -38,17 +38,26 @@ class QADF:
     cv            - 1%, 5%, 10% critical values for the estimated δ².
 
     """
-
     def __init__(self, endog, model='c', pmax=5, ic='AIC', exog=None):
         # setup
+        self.setup(endog, model, pmax, ic, exog)
+        
+    def setup(self, endog, model=None, pmax=None, ic=None, exog=None):
+        # Erase previous results
+        self.results = None
+        
+        # Custom instance changes
+        if model != None:
+            self.model = model
+        if pmax != None:
+            self.pmax = pmax
+        if ic != None:
+            self.ic = ic
+        
         if type(endog) != pd.Series:
             self.endog = pd.Series(endog, name='y')
         else:
             self.endog = endog
-        self.model = model
-        self.pmax = pmax
-        self.ic = ic
-        self.results = None
 
         # Creating endog and exog
         y1 = pd.DataFrame(self.endog.shift(1)[1:]).add_suffix(
@@ -71,7 +80,7 @@ class QADF:
 
         # Removing tails
         self.lags = p
-        self.extraExog = exog[p + 1:]
+        self.extraExog = exog[p + 1:] if type(exog) != type(None) else None
         self.L1 = y1[p:]
         self.diff = dy[p:]
         self.diffLags = dyl if self.lags > 0 else None
@@ -86,6 +95,7 @@ class QADF:
 
         # Adding additional exog if present
         self.exog = pd.concat([self.exog, self.extraExog], axis=1)
+        return self
 
     # Fitting data for different quantiles
     def fitForQuantiles(self, quantiles):
@@ -143,12 +153,10 @@ class QADF:
                 h = (1 - tau) / 1.5
 
         # Defining some inputs
-        y1 = pd.DataFrame(self.endog.shift(
-            1)[1:]).add_suffix('.L1')[self.lags:]
         if self.model == 'c':
-            X = add_constant(y1)
+            X = add_constant(self.L1)
         elif self.model == 'ct':
-            X = add_trend(add_constant(y1), 'ct')
+            X = add_trend(add_constant(self.L1), 'ct')
         else:
             raise ValueError(
                 'Model type is not recognized: ' + str(self.model))
@@ -158,7 +166,7 @@ class QADF:
         # The common case
         if self.lags > 0:
             X = self.exog
-
+        
         # Running the other 2 QuantRegs
         qOut2 = QuantReg(self.endog, X).fit(q=tau + h)
         qOut3 = QuantReg(self.endog, X).fit(q=tau - h)
@@ -177,7 +185,7 @@ class QADF:
         if fz < 0:
             fz = 0.01
 
-        xx = np.ones((len(X), 1))
+        xx = pd.Series(np.ones(len(X)), name='const')
         if self.lags > 0:
             if self.model == 'c':
                 xx = add_constant(self.diffLags)

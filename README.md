@@ -7,8 +7,8 @@ Parts of the code/logic such as formulas for the bandwidth and critical values (
 ```python
 y = pd.read_csv('data/examples.csv', index_col=0, squeeze=True)
 y.index = pd.date_range('2000-01-01', '2020-11-01', freq='MS')
-qADF = QADF(model='c', pmax=5, ic='AIC')
-qADF.fit(y, tau=0.42)
+qADF = QADF(y, model='c', pmax=5, ic='AIC')
+qADF.fit(tau=0.42)
 qADF.summary()
 ```
     quantile: 0.42
