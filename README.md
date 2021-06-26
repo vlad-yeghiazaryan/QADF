@@ -54,8 +54,8 @@ y.head()
 
 
 ```python
-qADF = QADF(model='c', pmax=5, ic='AIC')
-qADF.fit(y, tau=0.42)
+qADF = QADF(y, model='c', pmax=5, ic='AIC')
+qADF.fit(tau=0.42)
 qADF.summary()
 ```
 
@@ -74,7 +74,7 @@ qADF.summary()
 
 ```python
 quantiles = np.arange(0.1, 1, 0.1)
-CountryQADF = qADF.fitForQuantiles(y, quantiles)
+CountryQADF = qADF.fitForQuantiles(quantiles)
 CountryQADF
 ```
 
@@ -265,7 +265,7 @@ plt.show()
 
 ```python
 %%time
-results = pd.concat([qADF.fitForQuantiles(boots[yStar], quantiles) for yStar in boots])
+results = pd.concat([qADF.setup(boots[yStar]).fitForQuantiles(quantiles) for yStar in boots])
 ```
 
     CPU times: user 19min 33s, sys: 12min 33s, total: 32min 6s
