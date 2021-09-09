@@ -41,6 +41,8 @@ class QADF:
 
     def __init__(self, endog, model='c', pmax=5, ic='AIC', exog=None):
         # setup
+        self.convergence_failures = []
+        self.endog_original = endog
         self.setup(endog, model, pmax, ic, exog)
 
     def setup(self, endog, model=None, pmax=None, ic=None, exog=None):
@@ -57,10 +59,8 @@ class QADF:
 
         if type(endog) != pd.Series:
             self.endog = pd.Series(endog, name='y')
-            self.endog_original = pd.Series(endog, name='y')
         else:
             self.endog = endog
-            self.endog_original = endog
 
         # Creating endog and exog
         y1 = pd.DataFrame(self.endog.shift(1)[1:]).add_suffix(
@@ -109,6 +109,11 @@ class QADF:
         for tau in quantiles:
             res = self.fit(tau)
             results.append(res.results)
+            convergence_failure = False
+            if res.regression.iterations >= 1000:
+                convergence_failure = True
+            self.convergence_failures.append({'name':self.endog_original.name, **res.results, 
+                                             'convergence_failure':convergence_failure})
         df = pd.DataFrame(results)
 
         # Adding the QKS statistic
@@ -139,9 +144,6 @@ class QADF:
         w = self.diff
         cov = np.cov(phi, w)[0, 1]
         delta2 = (cov / (np.std(w, ddof=1) * np.sqrt(tau * (1 - tau)))) ** 2
-
-        # calculating critical values associate with our delta2
-        crv = self.crit_QRadf(delta2, self.model)
 
         # Calculating quantile bandwidth
         h = self.bandwidth(tau, n, True)
@@ -213,6 +215,8 @@ class QADF:
 
         # QADF statistic
         QURadf = fzCrt * eqPX * (rho_tau - 1)
+
+        # calculating critical values associated with our delta2
         cv = self.crit_QRadf(delta2, self.model)
 
         # Exposing variables
